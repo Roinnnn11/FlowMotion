@@ -178,6 +178,7 @@ class OptimizationParams(ParamGroup):
         self.w_mask = 2.0
         self.w_track = 1.0
         self.w_normal = 0
+        self.w_smooth = 1e-3  # temporal smoothness weight for DeterministicMotionModel
         super().__init__(parser, "Optimization Parameters")
 
 

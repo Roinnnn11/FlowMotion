@@ -22,6 +22,11 @@ class MotionModelBaseCZ(nn.Module):
     def velocity(self, x_t, t, tau):
         raise NotImplementedError(f"{self.motion_model_type} does not expose a velocity model.")
 
+    def get_mlp_parameters(self):
+        """Return any MLP parameters that need to be added to the external optimizer.
+        Override in subclasses that contain shared MLP networks."""
+        return iter([])  # empty by default
+
     def initialize_random(self, fused_point_cloud):
         raise NotImplementedError
 

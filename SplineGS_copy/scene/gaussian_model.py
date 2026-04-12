@@ -639,6 +639,15 @@ class GaussianModel:
             {"params": list(self.rgbdecoder.parameters()), "lr": training_args.rgb_lr, "name": "decoder"},
         ]
 
+        # Add motion MLP parameters if the motion model exposes them
+        motion_mlp_params = list(self.motion_model.get_mlp_parameters())
+        if motion_mlp_params:
+            l.append({
+                "params": motion_mlp_params,
+                "lr": training_args.deformation_lr_init * self.spatial_lr_scale,
+                "name": "motion_mlp",
+            })
+
         # Pose is run during warm up, we want a lower starting LR for fine
         if stage != "warm":
             if self._posenet is not None:

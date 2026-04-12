@@ -776,6 +776,18 @@ def scene_reconstruction(
 
         loss += cvd_pose_loss
 
+        # Temporal smoothness regularisation for DeterministicMotionModel
+        if (
+            stage == "fine"
+            and opt.w_smooth > 0
+            and hasattr(dyn_gaussians.motion_model, "smoothness_loss")
+        ):
+            tau_val = viewpoint_cams[0].time
+            smooth_loss = dyn_gaussians.motion_model.smoothness_loss(
+                dyn_gaussians.get_xyz.detach(), tau_val
+            )
+            loss += opt.w_smooth * smooth_loss
+
         loss.backward()
         if torch.isnan(loss).any():
             print("loss is nan,end training, ending program now.")
