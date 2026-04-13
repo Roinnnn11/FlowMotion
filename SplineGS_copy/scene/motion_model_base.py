@@ -1,3 +1,5 @@
+import os
+
 import torch
 from torch import nn
 
@@ -27,6 +29,36 @@ class MotionModelBaseCZ(nn.Module):
 
     def initialize_from_trajectory(self, canonical_xyz, dyn_trajectory, deform_spatial_scale):
         raise NotImplementedError
+
+    def get_optimizer_param_groups(self, training_args, spatial_lr_scale):
+        del training_args, spatial_lr_scale
+        return []
+
+    def regularization_terms(self, x0, deform_spatial_scale=1.0, smoothness_step=0.05):
+        del deform_spatial_scale, smoothness_step
+        zero = x0.sum() * 0.0
+        return {"anchor": zero, "smoothness": zero}
+
+    def save_state(self, path):
+        torch.save({"motion_model_type": self.motion_model_type, "state_dict": self.state_dict()}, path)
+
+    def load_state(self, path, map_location="cuda"):
+        if not os.path.exists(path):
+            return False
+
+        payload = torch.load(path, map_location=map_location)
+        if isinstance(payload, dict) and "state_dict" in payload:
+            checkpoint_motion_type = payload.get("motion_model_type")
+            if checkpoint_motion_type is not None and checkpoint_motion_type != self.motion_model_type:
+                raise ValueError(
+                    f"Motion checkpoint expects '{checkpoint_motion_type}', but current model is '{self.motion_model_type}'."
+                )
+            state_dict = payload["state_dict"]
+        else:
+            state_dict = payload
+
+        self.load_state_dict(state_dict, strict=False)
+        return True
 
     def flatten_control_point(self):
         if self.control_xyz.numel() == 0 or self.current_control_num.numel() == 0:

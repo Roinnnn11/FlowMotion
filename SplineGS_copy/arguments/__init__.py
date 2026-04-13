@@ -54,6 +54,9 @@ class ModelParams(ParamGroup):
         self.rgbfuntion = "sandwich"
         self.control_num = 12
         self.motion_model_type = "spline"
+        self.motion_hidden_dim = 128
+        self.motion_num_layers = 3
+        self.motion_pe_freqs = 4
         self.prune_error_threshold = 1.0
         
         self._source_path = ""
@@ -146,6 +149,12 @@ class OptimizationParams(ParamGroup):
         self.opacity_threshold_fine_after = 0.005
         self.fine_batch_size = 1
         self.coarse_batch_size = 1
+        self.motion_mlp_lr_init = 0.001
+        self.motion_mlp_lr_final = 0.0001
+        self.motion_anchor_weight = 0.05
+        self.motion_smoothness_weight = 0.1
+        self.motion_smoothness_step = 0.05
+        self.motion_reg_sample_size = 2048
         self.add_point = False
         self.use_instance_mask = False
 

@@ -178,6 +178,7 @@ class GaussianModel:
         self.computedscales = None
 
         self.rgbdecoder = getcolormodel(args.rgbfuntion)
+        self.motion_scheduler_args = None
 
     def create_pose_network(self, args, train_cams):
         self._posenet = pose_network(args, train_cams=train_cams).to("cuda")
@@ -218,6 +219,25 @@ class GaussianModel:
         if inference:
             return self.motion_model.forward_infer(self.get_xyz, tau, self.deform_spatial_scale)
         return self.motion_model(self.get_xyz, tau, self.deform_spatial_scale)
+
+    def motion_regularization(self, sample_size, smoothness_step):
+        if self.get_xyz.numel() == 0:
+            zero = torch.tensor(0.0, device="cuda")
+            return zero, zero
+
+        sample_size = int(min(sample_size, self.get_xyz.shape[0]))
+        if sample_size <= 0 or sample_size >= self.get_xyz.shape[0]:
+            sample_xyz = self.get_xyz
+        else:
+            sample_indices = torch.randperm(self.get_xyz.shape[0], device=self.get_xyz.device)[:sample_size]
+            sample_xyz = self.get_xyz[sample_indices]
+
+        reg_terms = self.motion_model.regularization_terms(
+            sample_xyz,
+            deform_spatial_scale=self.deform_spatial_scale,
+            smoothness_step=smoothness_step,
+        )
+        return reg_terms["anchor"], reg_terms["smoothness"]
 
     @property
     def get_scaling(self):
@@ -639,6 +659,8 @@ class GaussianModel:
             {"params": list(self.rgbdecoder.parameters()), "lr": training_args.rgb_lr, "name": "decoder"},
         ]
 
+        l.extend(self.motion_model.get_optimizer_param_groups(training_args, self.spatial_lr_scale))
+
         # Pose is run during warm up, we want a lower starting LR for fine
         if stage != "warm":
             if self._posenet is not None:
@@ -703,6 +725,15 @@ class GaussianModel:
             max_steps=training_args.position_lr_max_steps,
         )
 
+        if any(group["name"] == "motion_model" for group in l):
+            self.motion_scheduler_args = get_expon_lr_func(
+                lr_init=training_args.motion_mlp_lr_init,
+                lr_final=training_args.motion_mlp_lr_final,
+                max_steps=training_args.position_lr_max_steps,
+            )
+        else:
+            self.motion_scheduler_args = None
+
     def update_learning_rate(self, iteration):
         """Learning rate scheduling per step"""
         for param_group in self.optimizer.param_groups:
@@ -718,6 +749,9 @@ class GaussianModel:
                 lr = self.deformation_scheduler_args(iteration)
                 param_group["lr"] = lr
                 # return lr
+            elif param_group["name"] == "motion_model" and self.motion_scheduler_args is not None:
+                lr = self.motion_scheduler_args(iteration)
+                param_group["lr"] = lr
             elif param_group["name"] == "posenet":
                 lr = self.pose_scheduler_args(iteration)
                 param_group["lr"] = lr
@@ -751,14 +785,20 @@ class GaussianModel:
 
     def load_model(self, path):
         print("loading model from exists{}".format(path))
-        weight_dict = torch.load(os.path.join(path, "posenet.pth"), map_location="cuda")
-        if self._posenet is not None:
+        posenet_path = os.path.join(path, "posenet.pth")
+        if self._posenet is not None and os.path.exists(posenet_path):
+            weight_dict = torch.load(posenet_path, map_location="cuda")
             self._posenet.load_state_dict(weight_dict)
             self._posenet = self._posenet.to("cuda")
 
+        motion_model_path = os.path.join(path, "motion_model.pth")
+        self.motion_model.load_state(motion_model_path, map_location="cuda")
+
 
     def save_deformation(self, path):
-        torch.save(self._posenet.state_dict(), os.path.join(path, "posenet.pth"))
+        if self._posenet is not None:
+            torch.save(self._posenet.state_dict(), os.path.join(path, "posenet.pth"))
+        self.motion_model.save_state(os.path.join(path, "motion_model.pth"))
 
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))

@@ -454,6 +454,9 @@ def scene_reconstruction(
         gs_mask = 1
         gs_mask_0 = 1
         rcon_w = 1.0
+        motion_anchor_loss = torch.tensor(0.0, device="cuda")
+        motion_smoothness_loss = torch.tensor(0.0, device="cuda")
+        motion_reg_loss = torch.tensor(0.0, device="cuda")
 
         if stage != "warm":
             radii = torch.stack(radii_list, dim=0)
@@ -573,7 +576,17 @@ def scene_reconstruction(
                 normal_loss = l2_loss(normal_tensor, gt_normal_tensor, mask=motion_mask_tensor)
                 loss += opt.w_normal * normal_loss
 
+                motion_anchor_loss, motion_smoothness_loss = dyn_gaussians.motion_regularization(
+                    opt.motion_reg_sample_size,
+                    opt.motion_smoothness_step,
+                )
+                motion_reg_loss = (
+                    opt.motion_anchor_weight * motion_anchor_loss
+                    + opt.motion_smoothness_weight * motion_smoothness_loss
+                )
+
                 loss += reg_loss
+                loss += motion_reg_loss
 
         warped_prev, p_grid = deformation.inverse_warp_rt1_rt2(
             prev_image_tensor, CVD, w2c_target, w2c_prev, K_tensor, torch.inverse(K_tensor), ret_grid=True
