@@ -788,6 +788,18 @@ def scene_reconstruction(
             )
             loss += opt.w_smooth * smooth_loss
 
+        # Flow Matching loss for FMMotionModel
+        if (
+            stage == "fine"
+            and getattr(opt, "w_fm", 0) > 0
+            and hasattr(dyn_gaussians.motion_model, "fm_loss")
+        ):
+            tau_val = viewpoint_cams[0].time
+            fm_loss_val = dyn_gaussians.motion_model.fm_loss(
+                dyn_gaussians.get_xyz.detach(), tau_val
+            )
+            loss += opt.w_fm * fm_loss_val
+
         loss.backward()
         if torch.isnan(loss).any():
             print("loss is nan,end training, ending program now.")

@@ -179,6 +179,8 @@ class OptimizationParams(ParamGroup):
         self.w_track = 1.0
         self.w_normal = 0
         self.w_smooth = 1e-3  # temporal smoothness weight for DeterministicMotionModel
+        self.w_fm = 0.1       # Flow Matching loss weight for FMMotionModel
+        self.fm_euler_steps = 10  # Euler integration steps for FMMotionModel
         super().__init__(parser, "Optimization Parameters")
 
 
