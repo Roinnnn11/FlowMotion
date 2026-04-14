@@ -45,10 +45,10 @@ class FMMotionModelCZ(MotionModelBaseCZ):
 
     motion_model_type = "fm"
 
-    def __init__(self, control_num: int):
+    def __init__(self, control_num: int, n_euler_steps: int = 10):
         super().__init__(control_num)
         self.velocity_mlp = _FMVelocityMLP(hidden=128)
-        self.n_euler_steps = 10
+        self.n_euler_steps = n_euler_steps
 
     # ------------------------------------------------------------------
     # Initialisation helpers
@@ -110,34 +110,41 @@ class FMMotionModelCZ(MotionModelBaseCZ):
     # Losses
     # ------------------------------------------------------------------
 
-    def fm_loss(self, x0: torch.Tensor, tau) -> torch.Tensor:
-        """Conditional Flow Matching loss.
+    def fm_loss(self, x0: torch.Tensor, tau, delta_tau: float) -> torch.Tensor:
+        """Conditional Flow Matching loss using adjacent physical-time pairs.
 
-        Trains the velocity field to follow straight-line optimal transport
-        paths from x0 (canonical) to x1 (deformed at physical time tau).
+        Constructs local transport targets from adjacent scene states:
+            x_tau      = forward(x0, tau)
+            x_tau_next = forward(x0, tau + delta_tau)
 
-        L_FM = || v_theta(x_t, t, tau) - v* ||^2
-        where:
-            x1    = forward(x0, tau).detach()   (current ODE target)
-            t     ~ U(0, 1)
-            x_t   = (1-t)*x0 + t*x1             (linear interpolation)
-            v*    = x1 - x0                      (straight-line target velocity)
+        Trains the velocity field on the straight-line path between them:
+            t      ~ U(0, 1)
+            x_t    = (1-t)*x_tau + t*x_tau_next
+            v*     = (x_tau_next - x_tau) / delta_tau   <- normalised velocity
+            L_FM   = || v_theta(x_t, t, tau) - v* ||^2
+
+        v* is divided by delta_tau so the velocity field learns
+        "displacement per unit time", keeping the loss scale consistent
+        regardless of the frame-rate / delta_tau value.
         """
-        tau_t = expand_tau(tau, x0.shape[0], x0.device, x0.dtype)  # (N, 1)
+        tau_t = expand_tau(tau, x0.shape[0], x0.device, x0.dtype)          # (N, 1)
+        tau_next = (tau_t + delta_tau).clamp(0.0, 1.0)
+
         x0_d = x0.detach()
 
-        # Get ODE-integrated target positions (detached to avoid 2nd-order grads)
+        # Adjacent-frame positions (detached: no 2nd-order grads through ODE)
         with torch.no_grad():
-            x1 = self.forward(x0_d, tau_t)
+            x_tau      = self.forward(x0_d, tau_t)
+            x_tau_next = self.forward(x0_d, tau_next)
 
         # Sample random flow time t ~ U(0, 1)
         t = torch.rand(x0_d.shape[0], 1, device=x0_d.device, dtype=x0_d.dtype)
 
-        # Linear interpolation and target velocity
-        x_t = (1.0 - t) * x0_d + t * x1   # (N, 3)
-        v_star = x1 - x0_d                  # (N, 3)
+        # Linear interpolation and normalised target velocity
+        x_t    = (1.0 - t) * x_tau + t * x_tau_next          # (N, 3)
+        v_star = (x_tau_next - x_tau) / delta_tau             # (N, 3)  unit: displacement/time
 
-        # Velocity prediction
+        # Velocity prediction at the interpolated point
         v_pred = self.velocity_mlp(x_t, t, tau_t)
 
         return (v_pred - v_star).pow(2).mean()

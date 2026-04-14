@@ -98,6 +98,11 @@ def scene_reconstruction(
     ema_loss_for_log_reg = 0.0
     ema_loss_for_log_mask = 0.0
     ema_psnr_for_log = 0.0
+    ema_loss_for_log_pose = 0.0
+    ema_loss_for_log_track = 0.0
+    ema_loss_for_log_smooth = 0.0
+    ema_loss_for_log_fm = 0.0
+    ema_loss_for_log_total = 0.0
 
     final_iter = train_iter
     progress_bar = tqdm(range(first_iter, final_iter), desc="Training progress")
@@ -199,6 +204,7 @@ def scene_reconstruction(
 
         # Pick a random Camera
         viewpoint_cams = []
+        viewpoint_cam_ids = []
         prev_viewpoint_cams = []
         next_viewpoint_cams = []
 
@@ -211,6 +217,7 @@ def scene_reconstruction(
             
             id = viewpoint_stack_ids.pop(id)
             viewpoint_cams.append(viewpoint_stack[id])
+            viewpoint_cam_ids.append(id)
             idx += 1
 
             # Sample 3 views for training (1 target 2 reference)
@@ -295,6 +302,11 @@ def scene_reconstruction(
             gt_pixels.append(pixels)
 
         alpha_tensor = 1
+        photo_loss = torch.tensor(0.0, device="cuda")
+        track_loss = torch.tensor(0.0, device="cuda")
+        cvd_pose_loss = torch.tensor(0.0, device="cuda")
+        smooth_loss = torch.tensor(0.0, device="cuda")
+        fm_loss_val = torch.tensor(0.0, device="cuda")
         gt_image_tensor = torch.cat(gt_images, 0)
         gt_normal_tensor = torch.cat(gt_normals, 0)
         B, C, H, W = gt_image_tensor.shape
@@ -794,11 +806,19 @@ def scene_reconstruction(
             and getattr(opt, "w_fm", 0) > 0
             and hasattr(dyn_gaussians.motion_model, "fm_loss")
         ):
-            tau_val = viewpoint_cams[0].time
-            fm_loss_val = dyn_gaussians.motion_model.fm_loss(
-                dyn_gaussians.get_xyz.detach(), tau_val
-            )
-            loss += opt.w_fm * fm_loss_val
+            # Use true adjacent frame, not the random reference view
+            target_id = viewpoint_cam_ids[0]
+            n_views = len(viewpoint_stack)
+            fm_next_id = target_id + 1 if target_id + 1 < n_views else target_id - 1
+            fm_next_id = max(fm_next_id, 0)
+            tau_val      = viewpoint_stack[target_id].time
+            tau_next_val = viewpoint_stack[fm_next_id].time
+            delta_tau    = abs(tau_next_val - tau_val)
+            if delta_tau > 1e-6:
+                fm_loss_val = dyn_gaussians.motion_model.fm_loss(
+                    dyn_gaussians.get_xyz.detach(), tau_val, delta_tau=delta_tau
+                )
+                loss += opt.w_fm * fm_loss_val
 
         loss.backward()
         if torch.isnan(loss).any():
@@ -811,9 +831,11 @@ def scene_reconstruction(
             # Progress bar
             if stage != "warm":
                 ema_loss_for_log_photo = 0.4 * photo_loss.detach().item() + 0.6 * ema_loss_for_log_photo
-                # ema_loss_for_log_reg = 0.4 * reg_loss.detach().item() + 0.6 * ema_loss_for_log_reg
-                # ema_loss_for_log_mask = 0.4 * mask_loss.detach().item() + 0.6 * ema_loss_for_log_mask
-
+                ema_loss_for_log_pose = 0.4 * cvd_pose_loss.detach().item() + 0.6 * ema_loss_for_log_pose
+                ema_loss_for_log_track = 0.4 * track_loss.detach().item() + 0.6 * ema_loss_for_log_track
+                ema_loss_for_log_smooth = 0.4 * smooth_loss.detach().item() + 0.6 * ema_loss_for_log_smooth
+                ema_loss_for_log_fm = 0.4 * fm_loss_val.detach().item() + 0.6 * ema_loss_for_log_fm
+                ema_loss_for_log_total = 0.4 * loss.detach().item() + 0.6 * ema_loss_for_log_total
                 ema_psnr_for_log = 0.4 * psnr_.detach() + 0.6 * ema_psnr_for_log
             else:
                 ema_psnr_for_log = 0
@@ -822,7 +844,11 @@ def scene_reconstruction(
                     progress_bar.set_postfix(
                         {
                             "photo loss": f"{ema_loss_for_log_photo:.{6}f}",
-                            # "reg loss": f"{ema_loss_for_log_reg:.{6}f}",
+                            "pose loss": f"{ema_loss_for_log_pose:.{6}f}",
+                            "track loss": f"{ema_loss_for_log_track:.{6}f}",
+                            "smooth": f"{ema_loss_for_log_smooth:.{6}f}",
+                            "fm": f"{ema_loss_for_log_fm:.{6}f}",
+                            "total": f"{ema_loss_for_log_total:.{6}f}",
                             "psnr": f"{ema_psnr_for_log:.{2}f}",
                             "Pts (static, dynamic)": f"{no_stat_gs}, {no_dyn_gs}",
                             "Focal": f"{viewpoint_stack[0].focal}",
@@ -843,6 +869,14 @@ def scene_reconstruction(
                     progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
+
+            if tb_writer and stage != "warm":
+                tb_writer.add_scalar(f"{stage}/train_loss_patches/photo_loss", photo_loss.detach().item(), iteration)
+                tb_writer.add_scalar(f"{stage}/train_loss_patches/pose_loss", cvd_pose_loss.detach().item(), iteration)
+                tb_writer.add_scalar(f"{stage}/train_loss_patches/track_loss", track_loss.detach().item(), iteration)
+                tb_writer.add_scalar(f"{stage}/train_loss_patches/smooth_loss", smooth_loss.detach().item(), iteration)
+                tb_writer.add_scalar(f"{stage}/train_loss_patches/fm_loss", fm_loss_val.detach().item(), iteration)
+                tb_writer.add_scalar(f"{stage}/train_loss_patches/psnr", psnr_.detach().item(), iteration)
 
         # Log and save
         timer.pause()
@@ -1375,7 +1409,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--debug_from", type=int, default=-1)
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[100 * i for i in range(1000)])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1000, 3000, 5000, 7000, 10000, 15000, 20000, 25000])
     parser.add_argument(
         "--save_iterations",
         nargs="+",

@@ -14,6 +14,8 @@ MOTION_TYPE="fm"
 SMOOTH_W=1e-3
 FM_W=0.1
 SCENES=(Balloon1 Balloon2 Playground Jumping Truck Skating Umbrella)
+# Day 4 target scenes (4 GPUs in parallel)
+TARGET_SCENES=(Balloon1 Balloon2 Umbrella Playground)
 
 run_scene() {
     SCENE=$1
@@ -28,9 +30,21 @@ run_scene() {
         --w_fm ${FM_W}
 }
 
-if [ $# -eq 1 ] && [ "$1" != "--parallel" ]; then
+if [ $# -eq 1 ] && [ "$1" != "--parallel" ] && [ "$1" != "--day4" ]; then
     # Single scene
     run_scene "$1"
+elif [ "$1" == "--day4" ]; then
+    # Day 4: Balloon1/Balloon2/Umbrella/Playground, all on GPU 0 (A800 80GB fits 4 scenes)
+    PIDS=()
+    for SCENE in "${TARGET_SCENES[@]}"; do
+        run_scene "${SCENE}" 0 &
+        PIDS+=($!)
+        sleep 5
+    done
+    echo "Day4 scenes launched on GPU 0-3. PIDs: ${PIDS[*]}"
+    for PID in "${PIDS[@]}"; do
+        wait $PID && echo "PID $PID done" || echo "PID $PID failed"
+    done
 elif [ "$1" == "--parallel" ]; then
     PIDS=()
     for SCENE in "${SCENES[@]}"; do

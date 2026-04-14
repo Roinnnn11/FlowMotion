@@ -1,5 +1,5 @@
 OptimizationParams = dict(
-    iterations=25_000,
+    iterations=12500,
     coarse_batch_size=4,   # A800: was 2
     fine_batch_size=4,     # A800: was 2
     coarse_iterations=5_000,

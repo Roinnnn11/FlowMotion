@@ -12,4 +12,9 @@ def build_motion_model(args):
     }
     if motion_model_type not in builders:
         raise ValueError(f"Unsupported motion model type: {motion_model_type}")
+    if motion_model_type == "fm":
+        return FMMotionModelCZ(
+            args.control_num,
+            n_euler_steps=getattr(args, "fm_euler_steps", 10),
+        )
     return builders[motion_model_type](args.control_num)
